@@ -1,0 +1,109 @@
+---
+title: "Developing Data Products Homework #2"
+author: "M Anderson"
+date: "11/3/2021"
+output: slidy_presentation
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(rio)
+library(data.table)
+library(plyr)
+library(tidyverse)
+library(slider)
+library(lubridate)
+library(reshape2)
+library(kableExtra)
+library(plotly)
+library(ggthemes)
+url <- "https://tosa.maps.arcgis.com/sharing/rest/content/items/e8ef5344962345e7a94b436ee55a73be/data"
+covid <- rio::import(url)
+covid$Date <- as.Date(covid$`Specimen Date Collected`)
+covid$Month <- month(covid$Date)
+covid$Year <- year(covid$Date)
+covid$MoYr <- my(paste(covid$Month,covid$Year,sept="-"))
+maxdate <- max(covid$Date)
+covid$Status <- toupper(covid$Status)
+covid$Patient_Hospitalized <- covid$Patient_Hospitalized %>% replace_na("FALSE")
+covid$Hospitalized <- ifelse(covid$Patient_Hospitalized == "TRUE", "Hosp", "Not Hosp")
+covid$Died <- ifelse(covid$Status == "DECEASED", "Died", "Lived")
+covid$Recover <- ifelse(covid$Status == "RECOVERED", "Y", "N")
+covid$Pediatric <- ifelse(covid$Age < 18, "Y", "N")
+covid$Status <- recode(covid$Status, "DECEASED"="Deceased", "RECOVERED"="Recovered", "SYMPTOMATIC"="Symptomatic")
+covid$Status <- factor(covid$Status, levels=c("Symptomatic", "Recovered", "Deceased"))
+TotalActiveCases <- covid %>% filter(covid$Status == "Symptomatic") %>% tally()
+PedActiveCases <- covid %>% filter(covid$Status == "Symptomatic", Pediatric == "Y") %>% tally()
+PercentActivePed <- round((PedActiveCases/TotalActiveCases*100),1) 
+PedTotalCases <- covid %>% filter(Pediatric == "Y") %>% tally()
+PedHosp <- covid %>% filter(covid$Patient_Hospitalized == "TRUE", Pediatric == "Y") %>% tally()
+covid$Race <- covid$Reported_Race
+covid$Race[covid$Race == "Asian"] <- "Asian American or Pacific Islander"
+covid$Race[covid$Race == "Native Hawaiian or Other Pacific Islander"] <- "Asian American or Pacific Islander"
+covid$Race[covid$Race == "Other"] <- "Unknown"
+covid$AgeGroup[covid$Age < 5] <- "<5 years"
+covid$AgeGroup[covid$Age >= 5 & covid$Age < 10] <- "5-9 years"
+covid$AgeGroup[covid$Age >= 10 & covid$Age < 15] <- "10-14 years"
+covid$AgeGroup[covid$Age >= 15 & covid$Age < 20] <- "15-19 years"
+covid$AgeGroup[covid$Age >= 20 & covid$Age < 30] <- "20-29 years"
+covid$AgeGroup[covid$Age >= 30 & covid$Age < 40] <- "30-39 years"
+covid$AgeGroup[covid$Age >= 40 & covid$Age < 50] <- "40-49 years"
+covid$AgeGroup[covid$Age >= 50 & covid$Age < 60] <- "50-59 years"
+covid$AgeGroup[covid$Age >= 60 & covid$Age < 70] <- "60-69 years"
+covid$AgeGroup[covid$Age >= 70] <- "70+ years"
+covid$AgeGroup <- ordered(covid$AgeGroup, levels=c("<5 years", "5-9 years", "10-14 years", "15-19 years", "20-29 years", "30-39 years", "40-49 years", "50-59 years", "60-69 years", "70+ years"))
+AgeGroup <- c("<5 years", "5-9 years", "10-14 years", "15-19 years", "20-29 years", "30-39 years", "40-49 years", "50-59 years", "60-69 years", "70+ years")
+AgeGroup <- ordered(AgeGroup)
+AgePop <- c(3478, 2587, 2868, 2328, 1858+3874, 4669+3477, 2789+2865, 2802+3241, 2972+2353, 1617+1061+958+2174)
+pop <- data.frame(AgeGroup, AgePop)
+pop <- pop %>% rename("Population" = "AgePop")
+covid$AgeGroup2[covid$Age < 5] <- "<5 years"
+covid$AgeGroup2[covid$Age >= 5 & covid$Age < 10] <- "5-9 years"
+covid$AgeGroup2[covid$Age >= 10 & covid$Age < 15] <- "10-14 years"
+covid$AgeGroup2[covid$Age >=15 & covid$Age < 18] <- "15-17 years"
+covid$AgeGroup2[covid$Age >= 18] <- "18+ years"
+covid$AgeGroup2 <- factor(covid$AgeGroup2, levels=c("<5 years", "5-9 years", "10-14 years", "15-17 years", "18+ years"))
+AgeGroup2 <- c("<5 years", "5-9 years", "10-14 years", "15-17 years", "18+ years")
+AgeGroup2 <- ordered(AgeGroup2)
+AgePop2 <- c(3478, 2587, 2868, 1640, 37398)
+pop2 <- data.frame(AgeGroup2, AgePop2)
+pop2 <- rename(pop2, c("AgeGroup" = "AgeGroup2", "Population" = "AgePop2"))
+```
+
+### Pediatric COVID-19 Cases in a Small Midwestern City
+
+```{r, echo=FALSE}
+# 14 day sum of all cases by age group (indexed to not drop dates with zero cases)
+rolling_grp_cum <- data.frame(Date=as.Date(character()), NewCases=integer(), FourteenDaySum=integer(), FourteenDayAve=integer(), AgeGroup2=character(), CaseBurden=double())
+for(i in AgeGroup2) {
+  AgePop <- pop2$Population[AgeGroup2==i]
+  daily_counts_grp <- covid %>% filter(AgeGroup2 == i) %>% count(Date) %>% rename("NewCases" = "n") %>% arrange(Date)
+  rolling_grp <- daily_counts_grp %>% mutate(AgeGroup2=i, FourteenDaySum = slide_index_dbl(.x=daily_counts_grp$NewCases, .i=daily_counts_grp$Date, .f=~sum(.x,na.rm=TRUE), .before=days(13)))
+  rolling_grp <- rolling_grp %>% mutate(FourteenDayAve = round((FourteenDaySum/14),1))
+  rolling_grp <- rolling_grp %>% mutate(CaseBurden = round((FourteenDaySum/AgePop*100000),1))
+  rolling_grp <- rolling_grp %>% rename("Case Burden" = "CaseBurden", "Age Group" = "AgeGroup2")
+  rolling_grp_cum <- rbind(rolling_grp_cum, rolling_grp)
+}
+rolling_plot <- ggplot() + 
+  geom_line(data=rolling_grp_cum, aes(x=Date, y=`Case Burden`, color=`Age Group`), size=1) +
+  scale_x_date(date_breaks = "1 month") +
+  labs(title="Rolling 14 Day Average of New COVID-19 Cases by Age", x="Date Lab Specimen Collected", y="7 Day Average of New Cases") +
+  theme(axis.text.x=element_text(angle=60, hjust=1))
+plotly::ggplotly(rolling_plot)
+```
+
+### COVID-19 Cases and Outcomes by Age Group
+
+```{r, echo=FALSE}
+hosp <- covid %>% filter(Hospitalized == "Hosp") %>% group_by(AgeGroup, .drop=FALSE) %>% tally() %>% rename("Hospitalized"="n")
+died <- covid %>% filter(Status == "Deceased") %>% group_by(AgeGroup, .drop=FALSE) %>% tally()
+status <- covid %>% group_by(AgeGroup, Status, .drop=FALSE) %>% tally() 
+status <- dcast(status, AgeGroup ~ Status, value.var = "n") %>% rowwise() %>% mutate(TotalCases = sum(Symptomatic, Recovered, Deceased))
+status <- merge(status, hosp)
+status <- merge(status, pop)
+status <- status %>% select("AgeGroup", "Population", "TotalCases", "Symptomatic", "Recovered", "Deceased", "Hospitalized") %>% arrange(AgeGroup)
+status <- status %>% rowwise() %>% mutate(PercentInfected = round((TotalCases/Population*100),1)) 
+status <- status %>% rename("Age Group"="AgeGroup", "Total Cases to Date"="TotalCases", "Symptomatic Cases"="Symptomatic", "Recovered Cases"="Recovered", "Ever Hospitalized"="Hospitalized", "Percent Infected Since March 2020"="PercentInfected")
+status %>% kbl(align="lccccccc") %>% kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), font_size = 16) %>% column_spec(column=1:8, width_min="1.5in", border_left=TRUE)
+print(paste("Last updated: ", maxdate))
+```
